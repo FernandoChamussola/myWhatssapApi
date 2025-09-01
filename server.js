@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 5000;
 
 // Rota principal
 app.get('/', (req, res) => {
-  res.send('✅ API do WhatsApp está online!');
+  res.send('✅ API do WhatsApp está online!..');
 });
 
 // Enviar mensagem
