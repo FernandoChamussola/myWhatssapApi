@@ -5,10 +5,8 @@ import { inicializarSocket, enviarMensagem } from './bot.js';
 const app = express();
 app.use(cors());
 app.use(express.json());
-const PORT = 5000 || process.env.PORT;
 
-// Inicializa conexão com o WhatsApp
-await inicializarSocket();
+const PORT = process.env.PORT || 5000;
 
 // Rota principal
 app.get('/', (req, res) => {
@@ -32,9 +30,13 @@ app.post('/enviar', async (req, res) => {
   }
 });
 
+// Inicializar bot e servidor
+async function start() {
+  await inicializarSocket();
 
+  app.listen(PORT, () => {
+    console.log(`🌐 Servidor rodando na porta ${PORT}`);
+  });
+}
 
-// Start do servidor
-app.listen(PORT, () => {
-  console.log('🌐 Servidor rodando em http://localhost:5000');
-});
+start();
