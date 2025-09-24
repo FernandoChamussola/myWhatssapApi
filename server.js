@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import fetch from 'node-fetch'; // precisa instalar: npm install node-fetch
 import { inicializarSocket, enviarMensagem } from './bot.js';
 
 const app = express();
@@ -36,6 +37,16 @@ async function start() {
 
   app.listen(PORT, () => {
     console.log(`🌐 Servidor rodando na porta ${PORT}`);
+
+    // Auto-ping a cada 1min
+    setInterval(async () => {
+      try {
+        await fetch(`https://mywhatssapapi.onrender.com/`);
+        console.log('🔄 Auto-ping enviado para manter ativo...');
+      } catch (err) {
+        console.error('❌ Erro no auto-ping:', err.message);
+      }
+    }, 60 * 1000);
   });
 }
 
