@@ -1,0 +1,29 @@
+services:
+  whatsapp-api:
+    build: .
+    container_name: whatsapp-api
+    restart: unless-stopped
+    networks:
+      - traefik-public
+    # NÃO expõe portas - Traefik gerencia o acesso
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      # Adicione outras variáveis de ambiente necessárias aqui
+    volumes:
+      # Persistir autenticação do Baileys
+      - whatsapp-auth:/app/baileys_auth
+    labels:
+      # TRAEFIK LABELS - Configuração para wtsapi.duckdns.org
+      - "traefik.enable=true"
+      - "traefik.http.routers.whatsapp-api.rule=Host(`wtsapi.duckdns.org`)"
+      - "traefik.http.routers.whatsapp-api.entrypoints=websecure"
+      - "traefik.http.routers.whatsapp-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.whatsapp-api.loadbalancer.server.port=5000"
+
+volumes:
+  whatsapp-auth:
+
+networks:
+  traefik-public:
+    external: true  # Network criada externamente
