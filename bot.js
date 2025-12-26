@@ -1,157 +1,100 @@
 import { makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
-import qrcode from 'qrcode-terminal';
+import qrcode from 'qrcode';
+import fs from 'fs';
+import path from 'path';
 
-let sock = null;
-let isConnecting = false;
+const SESSIONS_DIR = './auth';
+if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR);
 
-export async function inicializarSocket() {
-  if (isConnecting) {
-    console.log('⚠️  Já está tentando conectar, aguarde...');
-    return;
-  }
-  
-  isConnecting = true;
-  
+let sockets = {};        // { numero: sock }
+let connecting = {};     // evitar múltiplas tentativas
+
+// Inicializar ou reconectar um número
+export async function inicializarSocket(numero) {
+  if (connecting[numero]) return;
+  connecting[numero] = true;
+
+  const authPath = path.join(SESSIONS_DIR, numero);
+  if (!fs.existsSync(authPath)) fs.mkdirSync(authPath);
+
   try {
-    console.log('🔄 Iniciando conexão WhatsApp...');
-    
-    // Usar pasta diferente para evitar conflitos
-    const { state, saveCreds } = await useMultiFileAuthState('./baileys_auth');
-    
-    sock = makeWASocket({
+    const { state, saveCreds } = await useMultiFileAuthState(authPath);
+
+    const sock = makeWASocket({
       auth: state,
-      // Configuração compatível com 6.4.0
       browser: ['WhatsApp Bot', 'Chrome', '1.0.0'],
-      printQRInTerminal: false,
-      // Remove configurações problemáticas
+      printQRInTerminal: false
     });
+
+    sockets[numero] = sock;
 
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
-      
+
       if (qr) {
-        console.log('\n📱 ESCANEIE O QR CODE ABAIXO COM SEU WHATSAPP:');
-        console.log('═'.repeat(60));
-        qrcode.generate(qr, { small: true });
-        console.log('═'.repeat(60));
-        console.log('⏳ Aguardando escaneamento... (não feche esta janela)\n');
+        const qrBase64 = await qrcode.toDataURL(qr);
+        sock.qrBase64 = qrBase64; // salvar QR temporário
       }
-      
+
       if (connection === 'close') {
-        isConnecting = false;
-        
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-        
-        console.log('❌ Conexão encerrada');
-        console.log('🔍 Status code:', statusCode);
-        
+
         if (statusCode === DisconnectReason.loggedOut) {
-          console.log('🚪 Você foi deslogado do WhatsApp');
-          console.log('💡 Solução: Delete a pasta "baileys_auth" e execute novamente');
+          console.log(`🚪 ${numero} deslogado. Apagando auth...`);
+          delete sockets[numero];
+          fs.rmSync(authPath, { recursive: true, force: true });
         } else if (shouldReconnect) {
-          console.log('🔄 Tentando reconectar em 5 segundos...');
-          setTimeout(() => inicializarSocket(), 5000);
+          console.log(`🔄 Reconectando ${numero} em 5s...`);
+          setTimeout(() => inicializarSocket(numero), 5000);
         }
-        
-      } else if (connection === 'open') {
-        isConnecting = false;
-        console.log('\n🎉 CONECTADO COM SUCESSO AO WHATSAPP!');
-        console.log('📞 Número conectado:', sock.user?.id?.split('@')[0] || 'N/A');
-        console.log('📱 Nome:', sock.user?.name || 'Não definido');
-        console.log('✅ Bot pronto para enviar mensagens!\n');
-        
-      } else if (connection === 'connecting') {
-        console.log('🔄 Conectando ao WhatsApp...');
       }
     });
 
     sock.ev.on('creds.update', saveCreds);
-    
-    // Log de mensagens recebidas (opcional)
-    sock.ev.on('messages.upsert', ({ messages, type }) => {
-      if (type === 'notify') {
-        for (const message of messages) {
-          if (!message.key.fromMe && message.message) {
-            const numero = message.key.remoteJid?.replace('@s.whatsapp.net', '');
-            console.log(`📩 Nova mensagem de ${numero}`);
-          }
-        }
-      }
-    });
-    
-  } catch (error) {
-    isConnecting = false;
-    console.error('❌ ERRO AO INICIALIZAR:', error.message);
-    
-    // Diagnóstico específico
-    if (error.message.includes('child')) {
-      console.log('\n🔧 ERRO DE DEPENDÊNCIA DETECTADO!');
-      console.log('💡 Execute estes comandos para corrigir:');
-      console.log('   rmdir /s /q node_modules');
-      console.log('   npm cache clean --force');
-      console.log('   npm install @whiskeysockets/baileys@6.4.0');
-      console.log('   npm install qrcode-terminal@0.12.0\n');
-    } else {
-      console.log('⏳ Tentando novamente em 8 segundos...');
-      setTimeout(() => inicializarSocket(), 8000);
-    }
+
+  } catch (err) {
+    console.error(`❌ Erro ao inicializar ${numero}:`, err.message);
+    delete sockets[numero];
+  } finally {
+    connecting[numero] = false;
   }
 }
 
-export async function enviarMensagem(numero, mensagem) {
-  if (!sock?.user?.id) {
-    throw new Error('WhatsApp não está conectado');
+// Enviar mensagem
+export async function enviarMensagem(origem, destino, mensagem) {
+  const sock = sockets[origem];
+
+  if (!sock || !sock.user?.id) {
+    await inicializarSocket(origem);
+    return { qrRequired: true, qr: sock?.qrBase64 || null, message: 'Escaneie o QR Code para conectar' };
   }
 
   try {
-    // Formata o número corretamente
-    const numeroLimpo = numero.replace(/\D/g, '');
+    const numeroLimpo = destino.replace(/\D/g, '');
     const jid = `${numeroLimpo}@s.whatsapp.net`;
-    
-    const resultado = await sock.sendMessage(jid, { text: mensagem });
-    console.log(`📤 ✅ Mensagem enviada para +${numeroLimpo}`);
-    
-    return { 
-      success: true, 
-      numero: numeroLimpo,
-      messageId: resultado.key.id 
-    };
-    
-  } catch (error) {
-    console.error(`❌ Falha ao enviar para ${numero}:`, error.message);
-    throw new Error(`Falha no envio: ${error.message}`);
+    const result = await sock.sendMessage(jid, { text: mensagem });
+    return { success: true, messageId: result.key.id };
+  } catch (err) {
+    console.error(`❌ Falha ao enviar de ${origem}:`, err.message);
+    // apagar auth e reiniciar sessão
+    const authPath = path.join(SESSIONS_DIR, origem);
+    fs.rmSync(authPath, { recursive: true, force: true });
+    delete sockets[origem];
+    return { qrRequired: true, qr: sock?.qrBase64 || null, message: 'Erro na conexão. Escaneie QR novamente.' };
   }
 }
 
-export function obterStatusConexao() {
+// Obter status de um número
+export function obterStatus(numero) {
+  const sock = sockets[numero];
   if (!sock) return 'desconectado';
-  if (isConnecting) return 'conectando';
   if (!sock.user?.id) return 'aguardando_qr';
   return 'conectado';
 }
 
-export function obterInfoUsuario() {
-  if (!sock?.user) return null;
-  return {
-    id: sock.user.id,
-    nome: sock.user.name,
-    numero: sock.user.id.split('@')[0]
-  };
-}
-
-// Auto-inicialização
-if (process.argv[1] && import.meta.url.includes(process.argv[1].replace(/\\/g, '/'))) {
-  console.log('🚀 INICIANDO WHATSAPP BOT...');
-  console.log('📋 Versão: Baileys 6.4.0');
-  console.log('⚡ Status: Inicializando...\n');
-  
-  inicializarSocket();
-  
-  // Shutdown graceful
-  process.on('SIGINT', () => {
-    console.log('\n\n👋 Encerrando WhatsApp Bot...');
-    if (sock) sock.end();
-    process.exit(0);
-  });
+// Obter QR Base64 para front-end
+export function obterQr(numero) {
+  const sock = sockets[numero];
+  return sock?.qrBase64 || null;
 }
